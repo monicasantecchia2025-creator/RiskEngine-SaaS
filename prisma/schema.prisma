@@ -1,0 +1,244 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum SubscriptionStatus {
+  INCOMPLETE
+  INCOMPLETE_EXPIRED
+  TRIALING
+  ACTIVE
+  PAST_DUE
+  CANCELED
+  UNPAID
+  PAUSED
+}
+
+enum AccountStatus {
+  PENDING_PLAN
+  ACTIVE
+  PAUSED_SUBSCRIPTION
+  PAUSED_RISK
+  DISCONNECTED
+  DELETED
+}
+
+enum Platform {
+  MT4
+  MT5
+}
+
+enum RiskActionType {
+  PAUSE_ACCOUNT
+  REQUEST_CLOSE_POSITIONS
+  NOTIFY
+}
+
+enum JobType {
+  METAAPI_SYNC
+  RISK_ENGINE_EVAL
+  SUBSCRIPTION_EXPIRY
+}
+
+enum JobStatus {
+  PENDING
+  RUNNING
+  DONE
+  FAILED
+}
+
+model User {
+  id            String         @id @default(cuid())
+  email         String         @unique
+  passwordHash  String
+  name          String
+  role          String         @default("user")
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+  subscriptions Subscription[]
+  accounts      Account[]
+  auditLogs     AuditLog[]
+}
+
+model Subscription {
+  id                    String             @id @default(cuid())
+  userId                String
+  user                  User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  provider              String             @default("stripe")
+  stripeCustomerId      String             @unique
+  stripeSubscriptionId  String?            @unique
+  stripePriceId         String?
+  status                SubscriptionStatus @default(INCOMPLETE)
+  currentPeriodStart    DateTime?
+  currentPeriodEnd      DateTime?
+  cancelAt              DateTime?
+  canceledAt            DateTime?
+  createdAt             DateTime           @default(now())
+  updatedAt             DateTime           @updatedAt
+  accounts              Account[]
+
+  @@index([userId])
+  @@index([stripeSubscriptionId])
+}
+
+model Account {
+  id               String        @id @default(cuid())
+  userId           String
+  user             User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  subscriptionId   String?
+  subscription     Subscription? @relation(fields: [subscriptionId], references: [id], onDelete: SetNull)
+  name             String
+  platform         Platform
+  metaapiAccountId String        @unique
+  brokerLogin      String?
+  brokerServer     String?
+  brokerName       String?
+  provisionedBy    String        @default("existing_metaapi")
+  status           AccountStatus @default(PENDING_PLAN)
+  pauseReason      String?
+  riskPausedUntil  DateTime?
+  disconnectedAt   DateTime?
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
+
+  tradingPlan      TradingPlan?
+  deals            Deal[]
+  dailyMetrics     DailyMetrics[]
+  riskEvents       RiskEvent[]
+  jobs             Job[]
+  outboxEvents     OutboxEvent[]
+  auditLogs        AuditLog[]
+
+  @@index([userId, status])
+}
+
+model TradingPlan {
+  id          String   @id @default(cuid())
+  accountId   String   @unique
+  account     Account  @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  rules       Json
+  timezone    String   @default("UTC")
+  dailyReset  Boolean  @default(true)
+  immutableSLTP Boolean @default(true)
+  createdAt   DateTime @default(now())
+
+  @@index([accountId])
+}
+
+model Deal {
+  id               String   @id @default(cuid())
+  accountId        String
+  account          Account  @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  providerDealId   String
+  symbol           String
+  volume           Float
+  side             String
+  entryPrice       Float
+  closePrice       Float?
+  pnl              Float
+  executedAt       DateTime
+  raw              Json?
+  createdAt        DateTime @default(now())
+
+  @@unique([accountId, providerDealId])
+  @@index([accountId, executedAt])
+}
+
+model DailyMetrics {
+  id              String   @id @default(cuid())
+  accountId       String
+  account         Account  @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  date            DateTime
+  equity          Float
+  balance         Float
+  dailyPnl        Float
+  drawdown        Float
+  tradesCount     Int
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@unique([accountId, date])
+  @@index([accountId, date])
+}
+
+model RiskEvent {
+  id             String         @id @default(cuid())
+  accountId      String
+  account        Account        @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  ruleKey        String
+  severity       String
+  message        String
+  actionType     RiskActionType
+  actionPayload  Json?
+  evaluatedAt    DateTime       @default(now())
+  resolvedAt     DateTime?
+  createdAt      DateTime       @default(now())
+
+  @@index([accountId, evaluatedAt])
+}
+
+model WebhookEvent {
+  id                  String   @id @default(cuid())
+  provider            String
+  providerEventId     String
+  type                String
+  payload             Json
+  signature           String?
+  processedAt         DateTime?
+  processingError     String?
+  createdAt           DateTime @default(now())
+
+  @@unique([provider, providerEventId])
+  @@index([type, createdAt])
+}
+
+model Job {
+  id               String    @id @default(cuid())
+  accountId        String?
+  account          Account?  @relation(fields: [accountId], references: [id], onDelete: SetNull)
+  type             JobType
+  status           JobStatus @default(PENDING)
+  attempts         Int       @default(0)
+  maxAttempts      Int       @default(10)
+  nextRunAt        DateTime  @default(now())
+  lastError        String?
+  lockedAt         DateTime?
+  lockOwner        String?
+  payload          Json?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  @@index([status, nextRunAt, type])
+}
+
+model OutboxEvent {
+  id             String   @id @default(cuid())
+  accountId      String?
+  account        Account? @relation(fields: [accountId], references: [id], onDelete: SetNull)
+  topic          String
+  payload        Json
+  publishedAt    DateTime?
+  createdAt      DateTime @default(now())
+
+  @@index([topic, publishedAt])
+}
+
+model AuditLog {
+  id             String   @id @default(cuid())
+  actorUserId    String?
+  actorUser      User?    @relation(fields: [actorUserId], references: [id], onDelete: SetNull)
+  accountId      String?
+  account        Account? @relation(fields: [accountId], references: [id], onDelete: SetNull)
+  action         String
+  entityType     String
+  entityId       String
+  metadata       Json?
+  createdAt      DateTime @default(now())
+
+  @@index([actorUserId, createdAt])
+  @@index([accountId, createdAt])
+}
