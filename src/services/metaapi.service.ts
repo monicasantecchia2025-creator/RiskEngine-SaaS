@@ -54,6 +54,11 @@ class MetaApiService {
     return (text ? JSON.parse(text) : {}) as T;
   }
 
+  private isConnectPathMissing(error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    return message.includes('MetaApi 404') && message.includes('/connect');
+  }
+
   async createAndConnectAccount(input: ProvisionInput): Promise<MetaApiAccount> {
     const payload = {
       name: input.accountName,
@@ -77,7 +82,16 @@ class MetaApiService {
     if (!accountId) throw new Error('MetaApi account creation returned no id');
 
     await this.request(`/users/current/accounts/${accountId}/deploy`, { method: 'POST' });
-    await this.request(`/users/current/accounts/${accountId}/connect`, { method: 'POST' });
+
+    try {
+      await this.request(`/users/current/accounts/${accountId}/connect`, { method: 'POST' });
+    } catch (error) {
+      if (!this.isConnectPathMissing(error)) {
+        throw error;
+      }
+      // Some MetaApi provisioning environments do not expose explicit /connect path.
+      // In that case deploy is enough and sync worker treats DEPLOYED as connected.
+    }
 
     return this.getAccount(accountId);
   }

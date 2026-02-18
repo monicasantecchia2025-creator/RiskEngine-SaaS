@@ -140,6 +140,8 @@ curl -X POST http://localhost:3000/accounts \
 
 El backend crea la cuenta en MetaApi, hace deploy + connect, guarda el `metaapiAccountId` generado y deja la cuenta en `PENDING_PLAN`.
 
+Nota: en algunos entornos de MetaApi el path `.../connect` no está disponible (404). El backend ya lo maneja y continúa con `deploy`; para el motor se considera conectada cuando el estado queda `DEPLOYED`.
+
 Regla comercial aplicada: por cada suscripción activa solo se permite 1 cuenta conectada.
 
 ## Paso F: Crear TradingPlan inmutable
