@@ -70,23 +70,53 @@ export async function webhookRoutes(app: FastifyInstance) {
         let normalizedStatus: SubscriptionStatus = 'INCOMPLETE';
         let periodStart: Date | null = null;
         let periodEnd: Date | null = null;
+        let stripeCustomerId = session.customer ? String(session.customer) : null;
+        const userIdFromSession = session.metadata?.userId ? String(session.metadata.userId) : null;
 
         if (session.subscription) {
           const stripeSubscription = await stripe.subscriptions.retrieve(String(session.subscription));
           normalizedStatus = toSubscriptionStatus(stripeSubscription.status);
           periodStart = stripeSubscription.current_period_start ? new Date(stripeSubscription.current_period_start * 1000) : null;
           periodEnd = stripeSubscription.current_period_end ? new Date(stripeSubscription.current_period_end * 1000) : null;
+          stripeCustomerId = stripeCustomerId ?? (stripeSubscription.customer ? String(stripeSubscription.customer) : null);
         }
 
-        await prisma.subscription.updateMany({
-          where: { stripeCustomerId: session.customer },
-          data: {
-            stripeSubscriptionId: session.subscription,
-            status: normalizedStatus,
-            currentPeriodStart: periodStart,
-            currentPeriodEnd: periodEnd
+        if (stripeCustomerId) {
+          const existing = await prisma.subscription.findFirst({
+            where: {
+              OR: [
+                { stripeCustomerId },
+                ...(session.subscription ? [{ stripeSubscriptionId: String(session.subscription) }] : []),
+                ...(userIdFromSession ? [{ userId: userIdFromSession }] : [])
+              ]
+            },
+            orderBy: { updatedAt: 'desc' }
+          });
+
+          if (existing) {
+            await prisma.subscription.update({
+              where: { id: existing.id },
+              data: {
+                stripeCustomerId,
+                stripeSubscriptionId: session.subscription ? String(session.subscription) : existing.stripeSubscriptionId,
+                status: normalizedStatus,
+                currentPeriodStart: periodStart,
+                currentPeriodEnd: periodEnd
+              }
+            });
+          } else if (userIdFromSession) {
+            await prisma.subscription.create({
+              data: {
+                userId: userIdFromSession,
+                stripeCustomerId,
+                stripeSubscriptionId: session.subscription ? String(session.subscription) : null,
+                status: normalizedStatus,
+                currentPeriodStart: periodStart,
+                currentPeriodEnd: periodEnd
+              }
+            });
           }
-        });
+        }
       }
 
       if (event.type.startsWith('invoice.')) {
